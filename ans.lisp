@@ -1435,8 +1435,8 @@
 (defun dump-node (node)
   (format t "~A~%"  (first node))
   (maphash (lambda (key value)
-	       (declare (ignore key))
-	       (dump-node value))
+             (declare (ignore key))
+             (dump-node value))
 	   (second node)))
 
 (defun get-ip-addr-piece (string offset)
@@ -1508,13 +1508,13 @@
     (let ((children (second node)))
       ;; Remove any empty children
       (maphash (lambda (key value) 
-		   (if (empty-node-p value) 
-		       (remhash key children)))
+                 (if (empty-node-p value) 
+                     (remhash key children)))
 	       children)
       ;; Recurse expiration through children
       (maphash (lambda (key value)
-                   (declare (ignore key))
-                   (expire-records now value))
+                 (declare (ignore key))
+                 (expire-records now value))
                children))))
 
 (defun expire-loop ()
@@ -1610,8 +1610,8 @@
 
       (when (and (ns-exists-p msg)
                  (not (soa-exists-p msg)))
-	  (return (list :delegation 
-                        (msg-authority msg) (msg-additional msg))))
+        (return (list :delegation 
+                      (msg-authority msg) (msg-additional msg))))
 
       ;; default.  This means that the name may exist but there are 
       ;; no records of the requested type.
@@ -1681,14 +1681,14 @@
            ;; record stats   XXX - this should be a decaying average
            (setf (rr-responsetime a) (- (get-internal-real-time) (expectedresponse-addtime er))
                  disp (message-disposition newmsg (expectedresponse-qname er)))
-		
+           
            ;;(format t "Response: ~S~%" newmsg)
            (when *verbose*
              (format t "Response disposition: ~S~%" disp))
            ;; possible responses
            ;; :badserver, :nxdomain, :answers, :delegation, :nomatch
            ;; :cname
-		
+           
            (when (eq (first disp) :badserver)
              (return :tryanotherserver))
 
@@ -1818,9 +1818,9 @@
                 (eq (first res) :cname))
            (let ((cname-disp (cname-disposition (second res) rrt (third res))))
              (return 
-             (if (eq cname-disp :answers)
-                 (cons :answers (cddr res))
-                 (list :cname (second cname-disp) (third res) (fourth res) (fifth res))))))
+               (if (eq cname-disp :answers)
+                   (cons :answers (cddr res))
+                   (list :cname (second cname-disp) (third res) (fourth res) (fifth res))))))
           ((eq res :nousefulresponse)
            ;; didn't hear back from any of the known nameservers.  In case we have wrong, outdated, or
            ;; incomplete NS record info, un-cache all NS records and hope for the best the next time around.
@@ -1916,7 +1916,7 @@
                  (format t "Maximum depth reached while trying to resolve nameserver ~A~%" 
                          (list-to-string (rr-data rr)))
                  (setf res (remote-resolve-addresses-of (rr-data rr) (1+ depth)))))
-               ;; Got some info.  
+           ;; Got some info.  
            (setf a-records (append a-records res))))))
     (randomize-list a-records)))
 
@@ -2000,8 +2000,8 @@
 	(values (leaf-ns leaf) (rr-name (first (leaf-ns leaf))))
         (cond
           ((eq nnn *db*)
-              (reload-cache)
-              (values (leaf-ns *db*) nil))
+           (reload-cache)
+           (values (leaf-ns *db*) nil))
           (t
            (locate-nearest-nameservers-with-glue-help (leaf-parent leaf)))))))
 
@@ -2292,18 +2292,18 @@
                (t
                 (error "Unexpected response from transfer-zone: ~S" rrlist)))))
       (when res
-	  (multiple-value-bind (node exact) (locate-node (secondary-domain sec))
-	    ;; some sanity checks.. Probably redundant.
-	    (unless exact
-              (error "Ack! Couldn't find node for ~A after reload!" (secondary-domain sec)))
-	    (let* ((leaf (first node))
-		   (soa (leaf-soa leaf)))
-	      (unless soa
-                (error "Ack! There is no SOA RR for domain ~A after reload!" (secondary-domain sec)))
-	      (setf (secondary-expired sec) nil
-                    (secondary-refresh sec) (fourth (rr-data soa))
-                    (secondary-retry sec) (fifth (rr-data soa))
-                    (secondary-expire sec) (sixth (rr-data soa))))))
+        (multiple-value-bind (node exact) (locate-node (secondary-domain sec))
+          ;; some sanity checks.. Probably redundant.
+          (unless exact
+            (error "Ack! Couldn't find node for ~A after reload!" (secondary-domain sec)))
+          (let* ((leaf (first node))
+                 (soa (leaf-soa leaf)))
+            (unless soa
+              (error "Ack! There is no SOA RR for domain ~A after reload!" (secondary-domain sec)))
+            (setf (secondary-expired sec) nil
+                  (secondary-refresh sec) (fourth (rr-data soa))
+                  (secondary-retry sec) (fifth (rr-data soa))
+                  (secondary-expire sec) (sixth (rr-data soa))))))
       res)))
 
 (defun get-rrlist-from-sock (sock master)
@@ -2425,10 +2425,10 @@
   (with-dblock ()
     (let (remlist)
       (maphash (lambda (name node)
-                   (unless (leaf-ns (first node))
-                     (if (leaf-node-p node)
-                         (push name remlist)
-                         (delete-zone node))))
+                 (unless (leaf-ns (first node))
+                   (if (leaf-node-p node)
+                       (push name remlist)
+                       (delete-zone node))))
                (second node))
       (dolist (key remlist)
         (remhash key (second node)))
@@ -2488,11 +2488,11 @@
   (when firsttime
     (dumpleaf (first node) name stream))
   (maphash (lambda (cname cnode)
-	       (dumpleaf (first cnode) cname stream))
+             (dumpleaf (first cnode) cname stream))
 	   (second node))
   (maphash (lambda (cname cnode)
-	       (when (> (hash-table-count (second cnode)) 0)
-                 (dumpdbnode cnode cname (leaf-name (first cnode)) stream nil)))
+             (when (> (hash-table-count (second cnode)) 0)
+               (dumpdbnode cnode cname (leaf-name (first cnode)) stream nil)))
 	   (second node)))
 
 (defun dumpleaf (leaf name stream)

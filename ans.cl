@@ -25,10 +25,19 @@
 
 (in-package :user)
 
+(use-package :mp)
+(use-package :acl-compat.mp)
+(use-package :acl-compat.excl)
 
 ;; for debugging
 (eval-when (compile load eval)
   (proclaim '(optimize (safety 1) (space 1) (speed 1) (debug 3))))
+
+(defmacro while (test &rest body)
+  "Repeat body while test is true."
+  (list* 'loop
+         (list 'unless test '(return nil))
+         body))
 
 ;; database format
 ;; a domain name is a list (toplevel secondlevel ...)
@@ -198,10 +207,10 @@
 
 ;; the database
 (defparameter *db* nil)
-(defparameter *dblock* (mp:make-process-lock :name "*db* lock"))
+(defparameter *dblock* (make-process-lock :name "*db* lock"))
 
 (defmacro with-dblock (&body body)
-  `(mp:with-process-lock (*dblock*)
+  `(with-process-lock (*dblock*)
      ,@body))
 
 ;; flags
@@ -424,7 +433,7 @@
 ;;; for record types that just hold domain names
 (defmacro make-record-maker (type)
   (let ((funcname (intern (format nil "~A-~A-~A" 'make type 'record)))
-	(typekeyword (intern type 'keyword)))
+	(typekeyword (intern #+acl type #-acl (symbol-name type) 'keyword)))
     `(defun ,funcname (name class ttl domain auth fromauth)
        (make-rr :type ,typekeyword
 		:rrtype (keyword-to-rrtype ,typekeyword)
@@ -467,12 +476,12 @@
 
 (defun main (&key forever)
   (if *mainprocess* 
-      (mp:process-kill *mainprocess*))
-  (setf *mainprocess* (mp:process-run-function "Main Loop" #'main-real))
+      (process-kill *mainprocess*))
+  (setf *mainprocess* (process-run-function "Main Loop" #'main-real))
 
   (if *expireprocess*
-      (mp:process-kill *expireprocess*))
-  (setf *expireprocess*  (mp:process-run-function "Expire process" #'expire-loop))
+      (process-kill *expireprocess*))
+  (setf *expireprocess*  (process-run-function "Expire process" #'expire-loop))
   
   (if forever
       (loop
@@ -483,23 +492,23 @@
 (defparameter *lasterror* nil)
 
 (defun main-real ()
-  (setf socket:*print-hostname-in-stream* nil) ;; definitely not good for a nameserver
+;;  (setf socket:*print-hostname-in-stream* nil) ;; definitely not good for a nameserver
   (ensure-sockets)
   (ensure-db)
   (dolist (pair *zonelist*)
     (read-zone-file (first pair) (second pair) t))
   (initialize-secondaries)
   (if *secondaryprocess*
-      (mp:process-kill *secondaryprocess*))
-  (setf *secondaryprocess* (mp:process-run-function "Secondary process" #'secondary-loop))
+      (process-kill *secondaryprocess*))
+  (setf *secondaryprocess* (process-run-function "Secondary process" #'secondary-loop))
   
   (let ((readylist)
 	(waitlist (list *usocket* *tsocket*)))
     (loop
-      (setf readylist (mp:wait-for-input-available waitlist))
+      (setf readylist (wait-for-input-available waitlist))
       (if (member *usocket* readylist)
 	  (multiple-value-bind (buf size peeraddr peerport) 
-	      (handler-case (socket:receive-from *usocket* 512)
+	      (handler-case (extensions::receive-from *usocket* 512)
 		(t (c)
 		  (setf *lasterror* c)
 		  (format t "Got ~A when doing receive-from.  Ignoring.~%" c)
@@ -511,7 +520,7 @@
 		    (format t "Got error ~A (~S) while within handle-message (or below)~%" c c))))
 	    (setf readylist (remove *usocket* readylist))))
       (if (member *tsocket* readylist)
-	  (mp:process-run-function "TCP client handler" #'tcp-client-handler (socket:accept-connection *tsocket*))))))
+	  (process-run-function "TCP client handler" #'tcp-client-handler (socket:accept-connection *tsocket*))))))
 
     
 (defun tcp-client-handler (s)
@@ -694,11 +703,11 @@
 	(case (getopcode (msg-flags msg))
 	  (#.*opcodeQUERY*
 	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (mp:process-run-function "Query handler" #'handle-question msg)
+	       (process-run-function "Query handler" #'handle-question msg)
 	     (handle-response msg)))
 	  (#.*opcodeNOTIFY*
 	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (mp:process-run-function "Notify request handler" #'handle-notify-request msg)
+	       (process-run-function "Notify request handler" #'handle-notify-request msg)
 	     (handle-response msg)))
 	  (t
 	   (format t "Unimplemented opcode ~D (~S)~%" (getopcode (msg-flags msg)) msg)
@@ -975,7 +984,6 @@
       
       (format t "Unimplemented query type ~D.  msg is ~S~%" (msg-qtype msg) msg))))
 
-
 (excl::defresource sendbuf 
   :constructor #'(lambda () (make-array 65535 :element-type '(unsigned-byte 8))))
 
@@ -1009,7 +1017,7 @@
 		     (write-byte (logand #xff offset) (msg-peersocket msg))
 		     (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
 		     (return)))
-		(ignore-errors (socket:send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
+		(ignore-errors (extensions::send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
 		(return)))
 	  ;; Responding to a query
 	  (if* (and (msg-answer msg) *verbose*)
@@ -1023,7 +1031,7 @@
 	  (if (eq (msg-peertype msg) :udp)
 	      (progn
 		(sizecheck buf offset (msg-flags msg)) 	    
-		(ignore-errors  (socket:send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
+		(ignore-errors  (extensions::send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
 		(return)))
 	;;; tcp
 	  (ignore-errors 
@@ -1103,7 +1111,7 @@
       (let (line tokens (origin ".") (lastname ".") name default-ttl
 	    node ttl type typekeyword)
 	    (while (setf line (get-next-thing s))
-		   ;;(format t "processing: ~S~%" line)
+		   (format t "processing: ~S~%" line)
 		   (cond
 		    ((multiple-value-bind (matched whole inner) (match-regexp "^$TTL\\b+\\(\\B+\\)" line)
 		       (declare (ignore whole))
@@ -1118,7 +1126,7 @@
 			   (setf origin inner))))
 		    (t
 		     (setf tokens (split-regexp "[ 	]+" line))
-		     ;;(format t "initial tokens ~S~%" tokens)
+		     (format t "initial tokens ~S~%" tokens)
 		     (if (member (schar line 0) '(#\space #\tab) :test #'char=)
 			 (setf name lastname)
 		       (progn
@@ -1126,7 +1134,7 @@
 			 (setf lastname name)))
 		     (if (string= (first tokens) "")
 			 (pop tokens))
-		     ;;(format t "remaining tokens ~S~%" tokens)
+		     (format t "remaining tokens ~S~%" tokens)
 		     (setf node (ensure-node name auth))
 		     ;; Optional TTL
 		     (if (match-regexp "^[0-9]+$" (first tokens))
@@ -1520,7 +1528,7 @@
 	(catch 'wake (sleep (- *nextttl* now)))))))
 
 (defun wake-expire-loop ()
-  (mp:process-interrupt *expireprocess* #'(lambda () (throw 'wake nil))))
+  (process-interrupt *expireprocess* #'(lambda () (throw 'wake nil))))
 
 ;; end expiration section
 
@@ -1528,16 +1536,31 @@
 ;;;; resolver section
 ;;;;
 
+#+allegro
 (defparameter *ids-in-use* (make-hash-table :values nil))
 
+#+allegro
 (defun choose-id ()
   (let (id)
-    (mp:without-scheduling
+    (without-scheduling
       (loop
 	(setf id (1+ (random 65535)))
 	(if (not (gethash id *ids-in-use*))
 	    (progn
 	      (puthash-key id *ids-in-use*)
+	      (return id)))))))
+#-allegro
+(defparameter *ids-in-use* (make-hash-table))
+
+#-allegro
+(defun choose-id ()
+  (let (id)
+    (without-scheduling
+      (loop
+	(setf id (1+ (random 65535)))
+	(if (not (gethash id *ids-in-use*))
+	    (progn
+	      (setf (gethash id *ids-in-use*) t)
 	      (return id)))))))
 
 (defun release-id (id)
@@ -1670,7 +1693,7 @@
 	
 	;;(if *verbose* (format t "timeout is ~D~%" timeout))
 	
-	(if* (mp:process-wait-with-timeout "Waiting for response" timeout #'mp:gate-open-p (expectedresponse-gate er))
+	(if* (process-wait-with-timeout "Waiting for response" timeout #'gate-open-p (expectedresponse-gate er))
 	   then ;; we got an answer
 		(setf newmsg (expectedresponse-msg er))
 		;; record stats   XXX - this should be a decaying average
@@ -2054,23 +2077,23 @@
 ;;; responses will be stuffed onto a list and processed by some other code
 
 (defparameter *expectedresponses* nil)
-(defparameter *expectedresponseslock* (mp:make-process-lock :name "*responselist* lock"))
+(defparameter *expectedresponseslock* (make-process-lock :name "*responselist* lock"))
 
 (defun add-expected-response (msg coverage)
   (let ((er (make-expectedresponse
 	     :id (msg-id msg)
 	     :peeraddr (msg-peeraddr msg)
 	     :peerport (msg-peerport msg)
-	     :gate (mp:make-gate nil)
+	     :gate (make-gate nil)
 	     :qname (msg-qname msg)
 	     :coverage coverage
 	     :addtime (get-internal-real-time))))
-    (mp:with-process-lock (*expectedresponseslock*)
+    (with-process-lock (*expectedresponseslock*)
       (push er *expectedresponses*))
     er))
    
 (defun remove-expected-response (msg)
-  (mp:with-process-lock (*expectedresponseslock*)
+  (with-process-lock (*expectedresponseslock*)
     (setf *expectedresponses*
       (remove msg *expectedresponses* :test #'(lambda (msg er) (= (msg-id msg) (expectedresponse-id er)))))))
 
@@ -2095,7 +2118,7 @@
 
 ;;; called from handle-message.
 (defun handle-response (msg)
-  (mp:with-process-lock (*expectedresponseslock*)
+  (with-process-lock (*expectedresponseslock*)
     (let ((er (locate-expected-response msg)))
       (if* er
 	 then
@@ -2103,7 +2126,7 @@
 	      ;;(format t "er is ~S~%" er)
 	      (setf (expectedresponse-msg er) msg)
 	      (add-msg-data-to-db msg (expectedresponse-coverage er))
-	      (mp:open-gate (expectedresponse-gate er))
+	      (open-gate (expectedresponse-gate er))
 	 else
 	      (if *verbose* (format t "Unexpected message received: ~S~%" msg))))))
 

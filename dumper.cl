@@ -1,11 +1,11 @@
-(maphash #'(lambda (name node)
-	     (format t "name: ~S node: ~S~%" name node)
-	     (let ((hash (second node))
-		   (maphash #'(lambda (key value)
-				(format t "key: ~S value: ~S~%" key value))))))
-	 (second n))
+(defun dumpnode (prefix name node)
+  (progn
+    (format t "~Aname: ~S node: ~%" prefix name node)
+    (setq prefix (format nil " ~A" prefix))
+    (maphash #'(lambda (key value)
+		 (format t "~Aname: ~S node: ~%" prefix key value)
+		 (if (not (= 0 (hash-table-count (second value))))
+		     (dumpnode prefix key value)))
+	     (second node))))
 
-
-
-
-
+(dumpnode "" "start" *db*)

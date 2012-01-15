@@ -54,9 +54,9 @@ save config.lisp
 
 start Lisp
 
-(asdf:oos 'asdf:load-op :ans) ;; you may have to adjust your asdf:*central-registry*
+```(asdf:oos 'asdf:load-op :ans) ;; you may have to adjust your asdf:*central-registry*```
 
-Evaluate (main).  
+Evaluate ```(main)```.  
 
 The nameserver is now running.  Try some test queries to make sure
 it's working as you expect (useful tools for testing: dig, host, or

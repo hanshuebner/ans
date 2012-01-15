@@ -1,0 +1,33 @@
+$Id: BUGS,v 1.16 2002/02/20 19:27:58 dancy Exp $
+
+Doesn't check a zone file for inconsistent information (a 'CNAME'
+record along w/ any other info, records that aren't in that zone, etc)
+
+Doesn't round-robin or randomize results (nameserver is randomized in
+some cases, actually).
+
+Need to handle dynamic updates [RFC2136]
+
+IXFR support? [RFC1995]
+
+When saving out zone files, save them in breadth first order.
+Or.. save the data in a lispy format.
+
+Need checks to make sure the configuration file doesn't try to make
+the server master AND slave for the same domain.
+
+Might need to fix add-or-update-srv-record.  I'm not sure what to
+compare against to determine whether an add or an update is happening.
+
+Memory consumption seems high.
+
+Should keep track of a request that's currently being processed and
+drop or queue any subsequent requests for the same information.
+
+BIND does a NS lookup of '.' right when it starts up.  ans should do
+that as well.
+
+Need to do the right thing w/ the recursion-desired query bit.  If
+recursion is not desired, we should avoid recursion.
+
+tcp client connections should be dropped after a period of inactivity.

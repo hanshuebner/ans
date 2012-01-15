@@ -1,0 +1,158 @@
+2001-12-11  root  <root@dancy>
+
+	* ans.cl:
+
+	Many changes to help w/ case mode issues.
+
+	Attempts to prevent cache poisoning.
+
+2001-10-11  Ahmon Dancy  <dancy@dancy>
+
+	* Added *verbose* parameter to control noise.  Changed
+	tcp-client-handler so that it doesn't treat end-of-file as an
+	error.  Commented out some debugging messages in various places.
+	Fixed file descriptor leak in transfer-zone by using an
+	unwind-protect.  
+
+2001-08-28  root  <root@candyman>
+
+	* ans.cl: 
+
+	Added 'forever' keyword arg to 'main' function to control whether
+	or not the main function loops forever.
+
+	Changed add-or-update-{a,ns,mx} to use if* for clarity.
+
+	Removed a syntax error near add-or-update-mx that was screwing
+	things up.
+
+	Moved the defstruct expectedresponse to before its first use.
+	
+2001-08-16    <layer@HOBART>
+
+	* ans.html: update
+
+2001-08-16  Kevin Layer  <layer@crikey>
+
+	* makedist: fix typo
+
+2001-08-16  Kevin Layer  <layer@crikey>
+
+	* makedist: add license.txt
+
+2001-08-15    <layer@HOBART>
+
+	* ans.html: update doc
+
+2001-08-15  Ahmon Dancy  <dancy@dancy>
+
+	* added preamble to ans.cl.  Added README.txt file.
+	Added binaries to the .cvsignore file.
+	
+
+2001-08-10  Ahmon Dancy  <dancy@dancy>
+
+	* added config.cl.sample file.  updated BUGS file.
+
+2001-08-02  root  <root@dancy>
+
+	* ans.cl: Updated code for doing secondary nameserver work.
+	Refreshes, retries and expires should work now [not really tested,
+	however]
+
+	Now using a resource for the output message buffer.  This should
+	save some memory allocation overhead.
+	
+	locate-node now only returns valid nodes.  
+	
+	new function locate-nearest-valid-node for use by locate-node.
+	
+	Fixed a bug where the *nextid* would grow larger than a 16-bit
+	number.  Now it wraps around to 1.
+
+	invalidate-node now marks a the node as non-authoritative as well
+	(so that, hopefully, we don't answer queries for expired
+	authoritative domains).  I'll probably have to add some code to
+	make sure that the nameserver never tries to query itself for zone
+	data.  It could cause a loop.
+
+	
+2001-07-19  root  <root@dancy>
+
+	* Added a *minimumttl* parameter.  Any TTLs we get back from
+	nameservers that are smaller than *minimumttl* will be bumped up
+	to *minimumttl*.  This is to prevent RRs with small TTLs (such as
+	a TTL of 0) from being erased from the cache before they can be
+	returned to the query client.
+
+	Adjusted extract-RRs func to use *minimumttl*.
+
+	Changed (dumpdb) so that you can choose the starting node.
+
+2001-07-17  root  <root@dancy>
+
+	* Fixed bug w/ the tcp client handling stuff.  Need to accept
+	the connection before doing mp:process-run-function... otherwise
+	there's a race condition that makes the program continually create
+	new tcp client handlers until the original one completed its
+	accept-connection (because the listener socket would still be
+	ready up until that point).
+
+	* Changed the order that RRs are dumped during an AXFR.
+
+	* Keep the main and expire loop processes in variables for easy
+	kill.   Make the (main) function kill old processes before
+	starting new ones.
+
+	* Added hacks to make the expire look sleep interruptible in case
+	a nearer-term TTL item has just been added to the cache.a
+	
+2001-07-16  root  <root@dancy>
+
+	* Way-simplified the tcp client handling stuff.
+
+	* Wrapped a general handler around the message handler.  When an
+	error occurs, the message receivd will be hexdumped for perusal.
+
+	* Added a coupla optimization statements here and there.
+
+	* Added some alists to map from type symbols to reader and writer
+	functions.
+
+	* Modified the expired-p function to be more efficient (that's a
+	time argument now instead of calling get-universal-time over and
+	over).  In fact, adjusted several things in the record expiration
+	code to make it a bit more efficient.   Still could use a way to
+	wake a sleeping process.
+
+	* No longer set the *RD* bit on queries to other nameservers.
+	Some of them won't return any answer at all (just an error
+	RCODE) if *RD* is set.  We don't need *RD* to be set so it's all
+	good.  [I've only encountered one nameserver that has behaved this way].
+
+	
+
+2001-07-12  root  <root@dancy>
+
+	* ans.cl: Added support for SRV resource records.    
+	Fixed *opcodeshift* (it was -12 when it should have been -11).  
+	Handles NOTIFY requests now. 
+	Added a keyword to put-name and its helpers to turn off
+	compression.
+	Bind *print-pretty* to 'nil' for the expire-records process.
+	Tried a different approach to avoid nameserver lookup infinite
+	recursion.
+	Added initial support for working as a secondary nameserver.
+	
+	
+
+2001-07-06  root  <root@gills.dancysoft.com>
+
+	*  Added .cvsignore file.
+
+	* Rearranged some code in ans.cl.  Added support for ANY (*) query type.
+
+	* Added ChangeLog
+	
+	
+

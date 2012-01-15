@@ -1,0 +1,13 @@
+(defparameter *dnsport* 53)
+(defparameter *dnshost* nil) ;; all interfaces
+(defparameter *rootcache* "named.root")
+(defparameter *zonelist* 
+    '(
+      ("test.com" "zones/test.com")
+      ("test.net" "zones/test.net")
+      ))
+(defparameter *secondarylist*
+    '(
+      ("somedomain.com" "zones/secondary/somedomain.com" ("1.2.3.4" "2.3.4.5"))
+      ("domain2.com" "zones/secondary/domain2.com" ("3.4.5.6" "7.8.9.10"))
+      ))

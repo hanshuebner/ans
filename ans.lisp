@@ -23,21 +23,8 @@
 ;;
 ;; $Id: ans.cl,v 1.21 2002/02/21 19:28:29 dancy Exp $
 
-(in-package :user)
-
-(use-package :mp)
-(use-package :acl-compat.mp)
-(use-package :acl-compat.excl)
-
-;; for debugging
-(eval-when (compile load eval)
-  (proclaim '(optimize (safety 1) (space 1) (speed 1) (debug 3))))
-
-(defmacro while (test &rest body)
-  "Repeat body while test is true."
-  (list* 'loop
-         (list 'unless test '(return nil))
-         body))
+(defpackage :ans
+  (:use :cl))
 
 ;; database format
 ;; a domain name is a list (toplevel secondlevel ...)
@@ -79,8 +66,8 @@
 
 
 ;; load in any overrides
-(eval-when (compile load eval)
-  (load "config.cl"))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (load "config.lisp"))
 
 ;; structs
 
@@ -207,10 +194,10 @@
 
 ;; the database
 (defparameter *db* nil)
-(defparameter *dblock* (make-process-lock :name "*db* lock"))
+(defparameter *dblock* (bt:make-lock "*db* lock"))
 
 (defmacro with-dblock (() &body body)
-  `(with-process-lock (*dblock*)
+  `(bt:with-lock-held (*dblock*)
      ,@body))
 
 ;; flags
@@ -364,8 +351,8 @@
     res))
 
 (defun leaf-any-writer (leaf rrs)
-  (if (notevery #'rr-negative rrs)
-      (error "leaf-any-writer doesn't won't work for non-negative RRs!"))
+  (when (notevery #'rr-negative rrs)
+    (error "leaf-any-writer doesn't won't work for non-negative RRs!"))
   (error "not done yet"))
 
 
@@ -458,70 +445,64 @@
 
 ;;; end macro section
 
-
-
 (defun ensure-sockets ()
   (unless *usocket*
-    (setf *usocket* (socket:make-socket :type :datagram 
-					:address-family :internet
-					:local-host *dnshost*
-					:local-port *dnsport*)))
+    (setf *usocket* (usocket:socket-connect nil nil
+                                           :protocol :datagram
+                                           :local-host *dnshost*
+                                           :local-port *dnsport*)))
   (unless *tsocket*
-    (setf *tsocket* (socket:make-socket :type :stream
-					:address-family :internet
-					:local-host *dnshost*
-					:local-port *dnsport*
-					:reuse-address t
-					:connect :passive))))
+    (setf *tsocket* (usocket:socket-listen *dnshost* *dnsport*
+                                           :reuse-address t))))
 
 (defun main (&key forever)
-  (if *mainprocess* 
-      (process-kill *mainprocess*))
-  (setf *mainprocess* (process-run-function "Main Loop" #'main-real))
+  (when *mainprocess* 
+    (bt:destroy-thread *mainprocess*))
+  (setf *mainprocess* (bt:make-thread #'main-real :name "Main Loop"))
 
-  (if *expireprocess*
-      (process-kill *expireprocess*))
-  (setf *expireprocess*  (process-run-function "Expire process" #'expire-loop))
+  (when *expireprocess*
+    (bt:destroy-thread *expireprocess*))
+  (setf *expireprocess* (bt:make-thread #'expire-loop :name "Expire process"))
   
-  (if forever
-      (loop
-	(sleep 86400)))
+  (when forever
+    (loop
+      (sleep 86400)))
   t)
 
 ;; For debugging
 (defparameter *lasterror* nil)
 
 (defun main-real ()
-  ;;  (setf socket:*print-hostname-in-stream* nil) ;; definitely not good for a nameserver
   (ensure-sockets)
   (ensure-db)
   (dolist (pair *zonelist*)
     (read-zone-file (first pair) (second pair) t))
   (initialize-secondaries)
-  (if *secondaryprocess*
-      (process-kill *secondaryprocess*))
-  (setf *secondaryprocess* (process-run-function "Secondary process" #'secondary-loop))
+  (when *secondaryprocess*
+    (bt:destroy-thread *secondaryprocess*))
+  (setf *secondaryprocess* (bt:make-thread #'secondary-loop :name "Secondary process"))
   
   (let ((readylist)
 	(waitlist (list *usocket* *tsocket*)))
     (loop
-      (setf readylist (wait-for-input-available waitlist))
-      (if (member *usocket* readylist)
-	  (multiple-value-bind (buf size peeraddr peerport) 
-	      (handler-case (extensions::receive-from *usocket* 512)
-		(t (c)
-		  (setf *lasterror* c)
-		  (format t "Got ~A when doing receive-from.  Ignoring.~%" c)
-		  nil))
-	    (if buf
-		(handler-case (handle-message buf size peeraddr peerport :udp nil)
-		  (t (c)
-		    (dump-buffer buf size)
-		    (format t "Got error ~A (~S) while within handle-message (or below)~%" c c))))
-	    (setf readylist (remove *usocket* readylist))))
-      (if (member *tsocket* readylist)
-	  (process-run-function "TCP client handler" #'tcp-client-handler (socket:accept-connection *tsocket*))))))
-
+      (setf readylist (usocket:wait-for-input waitlist))
+      (when (member *usocket* readylist)
+        (multiple-value-bind (buf size peeraddr peerport) 
+            (handler-case (usocket:socket-receive *usocket* nil 512)
+              (t (c)
+                (setf *lasterror* c)
+                (format t "Got ~A when doing receive-from.  Ignoring.~%" c)
+                nil))
+          (when buf
+            (handler-case (handle-message buf size peeraddr peerport :udp nil)
+              (t (c)
+                (dump-buffer buf size)
+                (format t "Got error ~A (~S) while within handle-message (or below)~%" c c))))
+          (setf readylist (remove *usocket* readylist))))
+      (when (member *tsocket* readylist)
+        (let ((socket (usocket:socket-accept *tsocket*)))
+          (bt:make-thread (lambda ()
+                            (tcp-client-handler socket)) :name "TCP client handler"))))))
 
 (defun tcp-client-handler (s)
   (unwind-protect
@@ -532,7 +513,7 @@
                      (pos 0))
                  (unless (= pos msglen)
                    (setf pos (read-sequence buf s :start pos :end msglen)))
-                 (handle-message buf msglen (socket:remote-host s) (socket:remote-port s) :tcp s))))
+                 (handle-message buf msglen (usocket:get-peer-address s) (usocket:get-peer-port s) :tcp s))))
          ;; error cases
          (end-of-file () ) ;; not an error
          (t (c)
@@ -703,11 +684,11 @@
 	(case (getopcode (msg-flags msg))
 	  (#.*opcodeQUERY*
 	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (process-run-function "Query handler" #'handle-question msg)
+	       (bt:make-thread (lambda () (handle-question msg)) :name "Query handler")
                (handle-response msg)))
 	  (#.*opcodeNOTIFY*
 	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (process-run-function "Notify request handler" #'handle-notify-request msg)
+	       (bt:make-thread (lambda () (handle-notify-request msg)) :name "Notify request handler")
                (handle-response msg)))
 	  (t
 	   (format t "Unimplemented opcode ~D (~S)~%" (getopcode (msg-flags msg)) msg)
@@ -945,11 +926,11 @@
       
       (when (or (eq keyword :any)
                 (member keyword *supported-types*))
-        (if *verbose*
-            (format t "~A: ~A? ~A~%" 
-                    (socket:ipaddr-to-dotted (msg-peeraddr msg))
-                    (rrtype-string rrt)
-                    (domain-to-string (msg-qname msg))))
+        (when *verbose*
+          (format t "~A: ~A? ~A~%" 
+                  (msg-peeraddr msg)
+                  (rrtype-string rrt)
+                  (domain-to-string (msg-qname msg))))
         
         (let ((res (resolve (msg-qname msg) rrt)))
           (cond
@@ -984,57 +965,54 @@
       
       (format t "Unimplemented query type ~D.  msg is ~S~%" (msg-qtype msg) msg))))
 
-(excl::defresource sendbuf 
-    :constructor (lambda () (make-array 65535 :element-type '(unsigned-byte 8))))
-
 (defun send-msg (msg)
   (block nil
-    (excl::with-resource (buf sendbuf)
-      (let (offset)
-	(with-compression (cs)
-	  (when (eq :response (msg-msgtype msg))
-            (setflag *QR* (msg-flags msg))
-            (setflag *RA* (msg-flags msg)))
-	  (put-short buf 0 (msg-id msg))
-	  (put-short buf 2 (msg-flags msg))
-	  (put-short buf *offsetqdcount* 1) ;; we only support one question right now
-	  (put-short buf *offsetancount* (length (msg-answer msg)))
-	  (put-short buf *offsetnscount* (length (msg-authority msg)))
-	  (put-short buf *offsetarcount* (length (msg-additional msg)))
-	  (setf offset (put-question buf 12 (msg-qname msg) (msg-qtype msg) (msg-qclass msg) cs))
-	  (dolist (func '(msg-answer msg-authority msg-additional))
-	    (dolist (rr (reverse (funcall func msg))) 
-	      (let ((putfunc (intern (format nil "~A-~A-~A" 'put (rr-type rr) 'record))))
-		(setf offset (funcall putfunc buf offset rr cs)))))
-	  (when (eq (msg-msgtype msg) :query) ;; we're sending off a query
-            (if (> offset 512)
-                (error "Want to send a query that is larger than 512 bytes.  What the heck!"))
-            (if (eq (msg-msgtype msg) :axfr)
-                (ignore-errors 
-                 (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
-                 (write-byte (logand #xff offset) (msg-peersocket msg))
-                 (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
-                 (return)))
-            (ignore-errors (extensions::send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
-            (return))
-	  ;; Responding to a query
-	  (when (and (msg-answer msg) *verbose*)
-            (write-line "Answer:")
-            (dolist (rr (reverse (msg-answer msg)))
-              (format t "~S~%" rr))
-            (write-line ""))
-	  ;; Responding to a query.  Use the same transaction type.
-	  ;; (format t "sending a response of type ~S~%" (msg-peertype msg))
-	  (when (eq (msg-peertype msg) :udp)
-            (sizecheck buf offset (msg-flags msg)) 	    
-            (ignore-errors  (extensions::send-to *usocket* buf offset :remote-host (msg-peeraddr msg) :remote-port (msg-peerport msg)))
-            (return))
-          ;; tcp
-	  (ignore-errors 
-	   (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
-	   (write-byte (logand #xff offset) (msg-peersocket msg))
-	   (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
-	   (return)))))))
+    (let (offset
+          (buf (make-array 65535 :element-type '(unsigned-byte 8))))
+      (with-compression (cs)
+        (when (eq :response (msg-msgtype msg))
+          (setflag *QR* (msg-flags msg))
+          (setflag *RA* (msg-flags msg)))
+        (put-short buf 0 (msg-id msg))
+        (put-short buf 2 (msg-flags msg))
+        (put-short buf *offsetqdcount* 1) ;; we only support one question right now
+        (put-short buf *offsetancount* (length (msg-answer msg)))
+        (put-short buf *offsetnscount* (length (msg-authority msg)))
+        (put-short buf *offsetarcount* (length (msg-additional msg)))
+        (setf offset (put-question buf 12 (msg-qname msg) (msg-qtype msg) (msg-qclass msg) cs))
+        (dolist (func '(msg-answer msg-authority msg-additional))
+          (dolist (rr (reverse (funcall func msg))) 
+            (let ((putfunc (intern (format nil "~A-~A-~A" 'put (rr-type rr) 'record))))
+              (setf offset (funcall putfunc buf offset rr cs)))))
+        (when (eq (msg-msgtype msg) :query) ;; we're sending off a query
+          (if (> offset 512)
+              (error "Want to send a query that is larger than 512 bytes.  What the heck!"))
+          (if (eq (msg-msgtype msg) :axfr)
+              (ignore-errors 
+               (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
+               (write-byte (logand #xff offset) (msg-peersocket msg))
+               (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
+               (return)))
+          (ignore-errors (usocket:socket-send *usocket* buf offset :host (msg-peeraddr msg) :port (msg-peerport msg)))
+          (return))
+        ;; Responding to a query
+        (when (and (msg-answer msg) *verbose*)
+          (write-line "Answer:")
+          (dolist (rr (reverse (msg-answer msg)))
+            (format t "~S~%" rr))
+          (write-line ""))
+        ;; Responding to a query.  Use the same transaction type.
+        ;; (format t "sending a response of type ~S~%" (msg-peertype msg))
+        (when (eq (msg-peertype msg) :udp)
+          (sizecheck buf offset (msg-flags msg)) 	    
+          (ignore-errors  (usocket:socket-send *usocket* buf offset :host (msg-peeraddr msg) :port (msg-peerport msg)))
+          (return))
+        ;; tcp
+        (ignore-errors 
+         (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
+         (write-byte (logand #xff offset) (msg-peersocket msg))
+         (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
+         (return))))))
 
 ;;; Zone transfer service stuff
 
@@ -1119,18 +1097,16 @@
             (return))
           (format t "processing: ~S~%" line)
           (cond
-            ((multiple-value-bind (matched whole inner) (match-regexp "^$TTL\\b+\\(\\B+\\)" line)
-               (declare (ignore whole))
+            ((multiple-value-bind (matched regs) (cl-ppcre:scan "^$TTL\\b+(\\B+)" line)
                (when matched
-                 (setf default-ttl (parse-integer inner))
+                 (setf default-ttl (parse-integer (aref regs 0)))
                  (format t "default ttl is ~D~%" default-ttl)
                  t)))
-            ((multiple-value-bind (matched whole inner) (match-regexp "^$ORIGIN\\b+\\(\\B+\\)" line)
-               (declare (ignore whole))
+            ((multiple-value-bind (matched regs) (cl-ppcre:scan "^\\$ORIGIN\\b+(\\B+)" line)
                (when matched
-                 (setf origin inner))))
+                 (setf origin (aref regs 0)))))
             (t
-             (setf tokens (split-regexp "[ 	]+" line))
+             (setf tokens (cl-ppcre:split "[ \\t]+" line))
              (format t "initial tokens ~S~%" tokens)
              (cond
                ((member (schar line 0) '(#\space #\tab) :test #'char=)
@@ -1143,7 +1119,7 @@
              (format t "remaining tokens ~S~%" tokens)
              (setf node (ensure-node name auth))
              ;; Optional TTL
-             (setf ttl (if (match-regexp "^[0-9]+$" (first tokens))
+             (setf ttl (if (cl-ppcre:scan "^[0-9]+$" (first tokens))
                            (parse-integer (pop tokens))
                            default-ttl))
              ;; Optional class
@@ -1532,7 +1508,7 @@
 	(catch 'wake (sleep (- *nextttl* now)))))))
 
 (defun wake-expire-loop ()
-  (process-interrupt *expireprocess* (lambda () (throw 'wake nil))))
+  (bt:interrupt-thread *expireprocess* (lambda () (throw 'wake nil))))
 
 ;; end expiration section
 
@@ -1540,19 +1516,21 @@
 ;;;; resolver section
 ;;;;
 
-(defparameter *ids-in-use* (make-hash-table :values nil))
+(defparameter *ids-in-use* (make-hash-table))
+(defvar *id-allocate-lock* (bt:make-lock))
 
 (defun choose-id ()
   (let (id)
-    (without-scheduling
-        (loop
-          (setf id (1+ (random 65535)))
-          (if (not (gethash id *ids-in-use*))
-              (progn
-                (puthash-key id *ids-in-use*)
-                (return id)))))))
+    (bt:with-lock-held (*id-allocate-lock*)
+      (loop
+        (setf id (1+ (random 65535)))
+        (unless (gethash id *ids-in-use*)
+          (setf (gethash id *ids-in-use*) t)
+          (return id))))))
+
 (defun release-id (id)
-  (remhash id *ids-in-use*))
+    (bt:with-lock-held (*id-allocate-lock*)
+      (remhash id *ids-in-use*)))
 
 (defmacro with-msg-id ((id) &body body)
   `(let ((,id (choose-id)))
@@ -1672,10 +1650,17 @@
                           *maxquerytimeout*))
 	(send-msg msg)
 	
-	;;(if *verbose* (format t "timeout is ~D~%" timeout))
-	
 	(cond
-          ((process-wait-with-timeout "Waiting for response" timeout #'gate-open-p (expectedresponse-gate er))
+          ;; fixme: the loop below was:
+          ;; (process-wait-with-timeout "Waiting for response" timeout #'gates:gate-open-p (expectedresponse-gate er))
+          ;; and it should really be better than what it is now
+          ((loop
+             (when (gates:gate-open-p (expectedresponse-gate er))
+               (return t))
+             (if (plusp timeout)
+                 (decf timeout)
+                 (return nil))
+             (sleep 1))
            ;; we got an answer
            (setf newmsg (expectedresponse-msg er))
            ;; record stats   XXX - this should be a decaying average
@@ -2054,23 +2039,23 @@
 ;;; responses will be stuffed onto a list and processed by some other code
 
 (defparameter *expectedresponses* nil)
-(defparameter *expectedresponseslock* (make-process-lock :name "*responselist* lock"))
+(defparameter *expectedresponseslock* (bt:make-lock "*responselist* lock"))
 
 (defun add-expected-response (msg coverage)
   (let ((er (make-expectedresponse
 	     :id (msg-id msg)
 	     :peeraddr (msg-peeraddr msg)
 	     :peerport (msg-peerport msg)
-	     :gate (make-gate nil)
+	     :gate (gates:make-gate)
 	     :qname (msg-qname msg)
 	     :coverage coverage
 	     :addtime (get-internal-real-time))))
-    (with-process-lock (*expectedresponseslock*)
+    (bt:with-lock-held (*expectedresponseslock*)
       (push er *expectedresponses*))
     er))
 
 (defun remove-expected-response (msg)
-  (with-process-lock (*expectedresponseslock*)
+  (bt:with-lock-held (*expectedresponseslock*)
     (setf *expectedresponses*
           (remove msg *expectedresponses* :test (lambda (msg er) (= (msg-id msg) (expectedresponse-id er)))))))
 
@@ -2092,7 +2077,7 @@
 
 ;;; called from handle-message.
 (defun handle-response (msg)
-  (with-process-lock (*expectedresponseslock*)
+  (bt:with-lock-held (*expectedresponseslock*)
     (let ((er (locate-expected-response msg)))
       (cond
         (er
@@ -2100,7 +2085,7 @@
          ;;(format t "er is ~S~%" er)
          (setf (expectedresponse-msg er) msg)
          (add-msg-data-to-db msg (expectedresponse-coverage er))
-         (open-gate (expectedresponse-gate er)))
+         (gates:open-gate (expectedresponse-gate er)))
         (t
          (when *verbose*
            (format t "Unexpected message received: ~S~%" msg)))))))
@@ -2150,7 +2135,7 @@
 (defun group-into-rrsets (rrs)
   (let (rrsets)
     (loop
-      (unless rss
+      (unless rrs
         (return))
       (multiple-value-bind (rrset remainder)
 	  (grab-matching-rrs rrs (rr-name (first rrs)) (rr-type (first rrs)))
@@ -2339,12 +2324,9 @@
       (unwind-protect 
            (handler-case
                (progn
-                 (setf sock (socket:make-socket :type :stream
-                                                :address-family :internet
-                                                :local-host *dnshost*
-                                                :remote-host master
-                                                :remote-port *dnsport*))
-                 ;;(format t "zone transfer socket fd ~D~%" (excl::stream-input-fn sock))
+                 (setf sock (usocket:socket-connect master *dnsport*
+                                                    :protocol :stream
+                                                    :local-host *dnshost*))
                  (with-msg-id (id)
                    (setf msg (make-msg :id id
                                        :flags 0

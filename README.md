@@ -7,9 +7,9 @@ The port is not yet functional!
 
 Here is the original readme.txt, edited to MD format:
 
-= Allegro Nameserver =
+# Allegro Nameserver #
 
-== Features ==
+## Features ##
 
 Written in Common Lisp.  This means no exploitable buffer overruns.
 Source code is freely available and is relatively small (compare to
@@ -18,7 +18,7 @@ Can be a primary or secondary nameserver.
 Can be used as just a caching nameserver.
 Supports the DNS NOTIFY protocol (when used as a secondary)
 
-== Setting up and using Allegro Nameserver ==
+## Setting up and using Allegro Nameserver ##
 
 copy config.lisp.sample to config.lisp.
 

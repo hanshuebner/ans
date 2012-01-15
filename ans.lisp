@@ -409,7 +409,8 @@
 (defmacro sizecheck (buf offset flags)
   `(if (> ,offset 512)
        (progn
-	 (if *verbose* (write-line "Setting *TC* flag"))
+	 (when *verbose*
+           (write-line "Setting *TC* flag"))
 	 (setflag *TC* ,flags)
 	 (put-short ,buf 2 ,flags)
 	 (setf ,offset 512))))
@@ -1763,8 +1764,8 @@
 	  res)
       (loop
 	(when (null addrlist)
-          (if *verbose* 
-              (format t "Couldn't determine the addresses for any nameservers in ~A.~%" nameservers))
+          (when *verbose* 
+            (format t "Couldn't determine the addresses for any nameservers in ~A.~%" nameservers))
           (return :no-nameservers))
 	(setf res (do-remote-query domain rrt addrlist coverage))
 	(cond
@@ -2081,7 +2082,7 @@
     (let ((er (locate-expected-response msg)))
       (cond
         (er
-         ;;(if *verbose* (format t "received message: ~S~%" msg))
+         ;;(when *verbose* (format t "received message: ~S~%" msg))
          ;;(format t "er is ~S~%" er)
          (setf (expectedresponse-msg er) msg)
          (add-msg-data-to-db msg (expectedresponse-coverage er))

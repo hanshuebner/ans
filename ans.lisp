@@ -26,6 +26,8 @@
 (defpackage :ans
   (:use :cl))
 
+(in-package :ans)
+
 ;; database format
 ;; a domain name is a list (toplevel secondlevel ...)
 
@@ -98,8 +100,8 @@
        (case (rr-type rr)
          (:a
           (format stream "A ~A" (number-to-ipaddr-string data))
-          (if (rr-responsetime rr)
-              (format stream "; (rt:~D)" (rr-responsetime rr))))
+          (when (rr-responsetime rr)
+            (format stream "; (rt:~D)" (rr-responsetime rr))))
          (:ns
           (format stream "NS ~A" (list-to-string data)))
          (:cname
@@ -351,9 +353,10 @@
     res))
 
 (defun leaf-any-writer (leaf rrs)
+  (declare (ignore leaf))
   (when (notevery #'rr-negative rrs)
     (error "leaf-any-writer doesn't won't work for non-negative RRs!"))
-  (error "not done yet"))
+  (error "leaf-any-writer not done yet"))
 
 
 ;; other constants
@@ -366,14 +369,14 @@
 
 ;; globals
 
-(defparameter *usocket* nil)
-(defparameter *tsocket* nil)
+(defvar *usocket* nil)
+(defvar *tsocket* nil)
 
 (defparameter *nextttl* 0)
 (defparameter *mainprocess* nil)
 (defparameter *expireprocess* nil)
 (defparameter *minimumttl* 10) ;; in case we get a RR with a ttl of 0.  This is pretty gross.
-(defparameter *secondaryprocess* nil)
+(defvar *secondaryprocess* nil)
 
 
 
@@ -448,10 +451,10 @@
 
 (defun ensure-sockets ()
   (unless *usocket*
-    (setf *usocket* (usocket:socket-connect nil nil
-                                           :protocol :datagram
-                                           :local-host *dnshost*
-                                           :local-port *dnsport*)))
+    (setf *usocket* (usocket:socket-connect usocket:*wildcard-host* nil
+                                            :protocol :datagram
+                                            :local-host *dnshost*
+                                            :local-port *dnsport*)))
   (unless *tsocket*
     (setf *tsocket* (usocket:socket-listen *dnshost* *dnsport*
                                            :reuse-address t))))
@@ -483,14 +486,13 @@
     (bt:destroy-thread *secondaryprocess*))
   (setf *secondaryprocess* (bt:make-thread #'secondary-loop :name "Secondary process"))
   
-  (let ((readylist)
-	(waitlist (list *usocket* *tsocket*)))
-    (loop
-      (setf readylist (usocket:wait-for-input waitlist))
+  (loop
+    (let ((readylist (usocket:wait-for-input (list *usocket* #+(or) *tsocket*))))
       (when (member *usocket* readylist)
         (multiple-value-bind (buf size peeraddr peerport) 
-            (handler-case (usocket:socket-receive *usocket* nil 512)
-              (t (c)
+            (handler-case
+                (usocket:socket-receive *usocket* nil 512)
+              (error (c)
                 (setf *lasterror* c)
                 (format t "Got ~A when doing receive-from.  Ignoring.~%" c)
                 nil))
@@ -498,8 +500,7 @@
             (handler-case (handle-message buf size peeraddr peerport :udp nil)
               (t (c)
                 (dump-buffer buf size)
-                (format t "Got error ~A (~S) while within handle-message (or below)~%" c c))))
-          (setf readylist (remove *usocket* readylist))))
+                (format t "Got error ~A (~S) while within handle-message (or below)~%" c c))))))
       (when (member *tsocket* readylist)
         (let ((socket (usocket:socket-accept *tsocket*)))
           (bt:make-thread (lambda ()
@@ -983,18 +984,19 @@
         (setf offset (put-question buf 12 (msg-qname msg) (msg-qtype msg) (msg-qclass msg) cs))
         (dolist (func '(msg-answer msg-authority msg-additional))
           (dolist (rr (reverse (funcall func msg))) 
-            (let ((putfunc (intern (format nil "~A-~A-~A" 'put (rr-type rr) 'record))))
+            (let ((putfunc (find-symbol (format nil "~A-~A-~A" 'put (rr-type rr) 'record) :ans)))
               (setf offset (funcall putfunc buf offset rr cs)))))
         (when (eq (msg-msgtype msg) :query) ;; we're sending off a query
-          (if (> offset 512)
-              (error "Want to send a query that is larger than 512 bytes.  What the heck!"))
-          (if (eq (msg-msgtype msg) :axfr)
-              (ignore-errors 
-               (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
-               (write-byte (logand #xff offset) (msg-peersocket msg))
-               (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
-               (return)))
-          (ignore-errors (usocket:socket-send *usocket* buf offset :host (msg-peeraddr msg) :port (msg-peerport msg)))
+          (when (> offset 512)
+            (error "Want to send a query that is larger than 512 bytes.  What the heck!"))
+          (when (eq (msg-msgtype msg) :axfr)
+            (ignore-errors 
+             (write-byte (logand #xff (ash offset -8)) (msg-peersocket msg))
+             (write-byte (logand #xff offset) (msg-peersocket msg))
+             (write-sequence buf (msg-peersocket msg) :start 0 :end offset)
+             (return)))
+          (ignore-errors
+           (usocket:socket-send *usocket* buf offset :host (msg-peeraddr msg) :port (msg-peerport msg)))
           (return))
         ;; Responding to a query
         (when (and (msg-answer msg) *verbose*)
@@ -1098,6 +1100,8 @@
             (return))
           (format t "processing: ~S~%" line)
           (cond
+            ((equal #\$ (char line 0))
+             (format t "skipped $ declaration~%"))
             ((multiple-value-bind (matched regs) (cl-ppcre:scan "^$TTL\\b+(\\B+)" line)
                (when matched
                  (setf default-ttl (parse-integer (aref regs 0)))
@@ -1141,7 +1145,7 @@
     (unless auth
       (setf ttl (+ (get-universal-time) ttl)))
     (case type
-      (:a (add-or-update-a-record leaf  (make-a-record name class ttl (first data) auth auth)))
+      (:a (add-or-update-a-record leaf (make-a-record name class ttl (first data) auth auth)))
       (:ns (add-or-update-ns-record leaf (make-ns-record name class ttl (augment-name (first data) origin) auth auth)))
       (:cname (setf (leaf-cname leaf) (make-cname-record name class ttl (augment-name (first data) origin) auth auth)))
       (:ptr (setf (leaf-ptr leaf) (make-ptr-record name class ttl (augment-name (first data) origin) auth auth)))

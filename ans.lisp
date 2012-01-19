@@ -1659,13 +1659,13 @@
           ;; fixme: the loop below was:
           ;; (process-wait-with-timeout "Waiting for response" timeout #'gates:gate-open-p (expectedresponse-gate er))
           ;; and it should really be better than what it is now
-          ((loop
-             (when (gates:gate-open-p (expectedresponse-gate er))
-               (return t))
-             (if (plusp timeout)
-                 (decf timeout)
-                 (return nil))
-             (sleep 1))
+          ((handler-case
+               (bt:with-timeout (timeout)
+                 (gates:wait-open-gate (expectedresponse-gate er))
+                 t)
+             (bt:timeout (c)
+               (declare (ignore c))
+               nil))
            ;; we got an answer
            (setf newmsg (expectedresponse-msg er))
            ;; record stats   XXX - this should be a decaying average

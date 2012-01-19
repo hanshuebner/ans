@@ -33,6 +33,7 @@
 
 ;; RRs:
 ;; an A record is a (unsigned-byte 32)
+;; an AAAA record is a (unsigned-byte 128)
 ;; an NS record is a domain name
 ;; a CNAME record a domain name 
 ;; a SOA record is a list of (mname rname serial refresh retry expire minimum)
@@ -102,6 +103,10 @@
           (format stream "A ~A" (number-to-ipaddr-string data))
           (when (rr-responsetime rr)
             (format stream "; (rt:~D)" (rr-responsetime rr))))
+         (:aaaa
+          (format stream "AAAA ~A" (number-to-ipv6addr-string data))
+          (when (rr-responsetime rr)
+            (format stream "; (rt:~D)" (rr-responsetime rr))))
          (:ns
           (format stream "NS ~A" (list-to-string data)))
          (:cname
@@ -133,6 +138,7 @@
 (defstruct (leaf (:print-object leaf-printer))
   name
   a
+  aaaa
   ns
   cname
   soa
@@ -145,8 +151,8 @@
   )
 
 (defun leaf-printer (leaf stream)
-  (format stream "#S(leaf :name ~S :a ~S :ns ~S :cname ~S :soa ~S :ptr ~S :mx ~S :srv ~S :authority ~S :valid ~S) "
-	  (leaf-name leaf) (leaf-a leaf) (leaf-ns leaf) 
+  (format stream "#S(leaf :name ~S :a ~S :aaaa ~S :ns ~S :cname ~S :soa ~S :ptr ~S :mx ~S :srv ~S :authority ~S :valid ~S) "
+	  (leaf-name leaf) (leaf-a leaf) (leaf-aaaa leaf) (leaf-ns leaf) 
 	  (leaf-cname leaf) (leaf-soa leaf) (leaf-ptr leaf) 
 	  (leaf-mx leaf) (leaf-srv leaf) (leaf-authority leaf) 
 	  (leaf-valid leaf)))
@@ -163,6 +169,7 @@
 
 (eval-when (eval compile load)
   (leaf-X-writer a)
+  (leaf-X-writer aaaa)
   (leaf-X-writer ns)
   (leaf-X-writer cname)
   (leaf-X-writer soa)
@@ -175,7 +182,6 @@
   (third (rr-data rr)))
 (defun soa-minimum (rr)
   (seventh (rr-data rr)))
-
 
 (defstruct msg
   (msgtype :response)
@@ -308,17 +314,17 @@
   (defparameter *rrtype-by-code* nil)
   (defparameter *rrtype-by-string* nil)
   
-  (defparameter *supported-types* '(:a :ns :cname :soa :ptr :mx :srv))
+  (defparameter *supported-types* '(:a :aaaa :ns :cname :soa :ptr :mx :srv))
   
   (dolist (ent 
            '((:a #.*typeA* "A" leaf-a leaf-a-writer :multi)
+             (:aaaa #.*typeAAAA* "AAAA" leaf-aaaa leaf-aaaa-writer :multi)
              (:ns #.*typeNS* "NS" leaf-ns leaf-ns-writer :multi)
              (:cname #.*typeCNAME* "CNAME" leaf-cname leaf-cname-writer :single)
              (:soa #.*typeSOA* "SOA" leaf-soa leaf-soa-writer :single)
              (:ptr #.*typePTR* "PTR" leaf-ptr leaf-ptr-writer :single)
              (:mx #.*typeMX* "MX" leaf-mx leaf-mx-writer :multi)
              (:srv #.*typeSRV* "SRV" leaf-srv leaf-srv-writer :multi)
-             (:aaaa #.*typeAAAA* "AAAA" nil nil nil)
              (:axfr #.*typeAXFR* "AXFR" nil nil nil)
              (:any #.*typeANY* "ANY" leaf-any-reader leaf-any-writer :multi)))
     (let ((rrt (make-rrtype
@@ -328,12 +334,9 @@
 		:reader (fourth ent)
 		:writer (fifth ent)
 		:method (sixth ent))))
-      (setf *rrtype-by-keyword*
-            (cons (cons (rrtype-keyword rrt) rrt) *rrtype-by-keyword*))
-      (setf *rrtype-by-code*
-            (cons (cons (rrtype-code rrt) rrt) *rrtype-by-code*))
-      (setf *rrtype-by-string*
-            (cons (cons (rrtype-string rrt) rrt) *rrtype-by-string*)))))
+      (setf *rrtype-by-keyword* (cons (cons (rrtype-keyword rrt) rrt) *rrtype-by-keyword*)
+            *rrtype-by-code* (cons (cons (rrtype-code rrt) rrt) *rrtype-by-code*)
+            *rrtype-by-string* (cons (cons (rrtype-string rrt) rrt) *rrtype-by-string*)))))
 
 ;; Special 'any' handlers
 
@@ -378,8 +381,6 @@
 (defparameter *minimumttl* 10) ;; in case we get a RR with a ttl of 0.  This is pretty gross.
 (defvar *secondaryprocess* nil)
 
-
-
 ;; macro section
 
 (defmacro clearflag (flag flags)
@@ -410,13 +411,12 @@
 
 ;;; should skip the check for TCP transport
 (defmacro sizecheck (buf offset flags)
-  `(if (> ,offset 512)
-       (progn
-	 (when *verbose*
-           (write-line "Setting *TC* flag"))
-	 (setflag *TC* ,flags)
-	 (put-short ,buf 2 ,flags)
-	 (setf ,offset 512))))
+  `(when (> ,offset 512)
+     (when *verbose*
+       (write-line "Setting *TC* flag"))
+     (setflag *TC* ,flags)
+     (put-short ,buf 2 ,flags)
+     (setf ,offset 512)))
 
 (defmacro make-node (name parent)
   `(list (make-leaf :name ,name :parent ,parent) (make-hash-table :test #'equalp)))
@@ -438,8 +438,7 @@
 (eval-when (compile load eval)
   (make-record-maker ns)
   (make-record-maker cname)
-  (make-record-maker ptr)
-  )
+  (make-record-maker ptr))
 
 (defmacro add-or-update-node (nodename node parent)
   `(setf (gethash ,nodename (second ,parent)) ,node))
@@ -535,7 +534,6 @@
         (write-string " ")))
   (write-line ""))
 
-
 ;; rr type lookups
 (defun code-to-rrtype (code)
   (cdr (assoc code *rrtype-by-code* :test #'=)))
@@ -547,7 +545,6 @@
   (cdr (assoc s *rrtype-by-string* :test #'equalp)))
 
 ;;;
-
 
 (defun extract-questions (buf size msg)
   (let ((offset 12))
@@ -595,6 +592,14 @@
 	  (#.*typeA* 
 	   (setf rr (make-a-record name class ttl (get-long buf offset size) auth fromauth))
 	   (incf offset 4))
+	  (#.*typeAAAA*
+	   (setf rr (make-aaaa-record name class ttl
+                                      (logior (ash (get-long buf (+ offset 12) size) 96)
+                                              (ash (get-long buf (+ offset 8) size) 64)
+                                              (ash (get-long buf (+ offset 4) size) 32)
+                                              (get-long buf offset size))
+                                      auth fromauth))
+	   (incf offset 16))
 	  (#.*typeNS* 
 	   (multiple-value-bind (ns newoffset) (get-name buf offset size)
 	     (setf offset newoffset)
@@ -682,19 +687,19 @@
 
 (defun handle-message (buf size peeraddr peerport peertype peersocket)
   (multiple-value-bind (msg status) (make-msg-from-buf buf size peeraddr peerport peertype peersocket nil)
-    (if (eq status :ok)
-	(case (getopcode (msg-flags msg))
-	  (#.*opcodeQUERY*
-	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (bt:make-thread (lambda () (handle-question msg)) :name "Query handler")
-               (handle-response msg)))
-	  (#.*opcodeNOTIFY*
-	   (if (zerop (logand *QR* (msg-flags msg)))
-	       (bt:make-thread (lambda () (handle-notify-request msg)) :name "Notify request handler")
-               (handle-response msg)))
-	  (t
-	   (format t "Unimplemented opcode ~D (~S)~%" (getopcode (msg-flags msg)) msg)
-	   (send-notimp-response msg))))))
+    (when (eq status :ok)
+      (case (getopcode (msg-flags msg))
+        (#.*opcodeQUERY*
+         (if (zerop (logand *QR* (msg-flags msg)))
+             (bt:make-thread (lambda () (handle-question msg)) :name "Query handler")
+             (handle-response msg)))
+        (#.*opcodeNOTIFY*
+         (if (zerop (logand *QR* (msg-flags msg)))
+             (bt:make-thread (lambda () (handle-notify-request msg)) :name "Notify request handler")
+             (handle-response msg)))
+        (t
+         (format t "Unimplemented opcode ~D (~S)~%" (getopcode (msg-flags msg)) msg)
+         (send-notimp-response msg))))))
 
 ;; easy
 (defun send-notimp-response (msg)
@@ -842,6 +847,20 @@
   (incf offset 2)
   (put-long buf offset (rr-data rr)) ;; RDATA
   (+ offset 4))
+
+(defun put-aaaa-record (buf offset rr cs)
+  (setf offset (put-question buf offset (rr-name rr) *typeAAAA* (rr-class rr) cs)) ;; puts NAME, TYPE, CLASS
+  ;;; XXX -- this is where the ttl transformation should actually happen.. no earlier
+  (put-long buf offset (get-adjusted-ttl rr)) ;; TTL
+  (incf offset 4)
+  (put-short buf offset 4) ;; RDLENGTH
+  (incf offset 2)
+  ;; fixme BYTE ORDER CORRECT?
+  (put-long buf offset (ldb (byte 32 96) (rr-data rr)))
+  (put-long buf offset (ldb (byte 32 64) (rr-data rr)))
+  (put-long buf offset (ldb (byte 32 32) (rr-data rr)))
+  (put-long buf offset (ldb (byte 32 0) (rr-data rr)))
+  (+ offset 16))
 
 (defun put-common-record (buf offset rr cs)
   (setf offset 
@@ -1060,7 +1079,7 @@
          (maphash (make-zone-transfer-map-func msg) (second node)))))))
 
 (defun add-all-rrs (leaf msg)
-  (dolist (reader '(leaf-ns leaf-a leaf-cname leaf-mx leaf-ptr leaf-srv))
+  (dolist (reader '(leaf-ns leaf-a leaf-aaaa leaf-cname leaf-mx leaf-ptr leaf-srv))
     (let ((res (funcall reader leaf)))
       (when res
         (if (listp res)
@@ -1146,6 +1165,7 @@
       (setf ttl (+ (get-universal-time) ttl)))
     (case type
       (:a (add-or-update-a-record leaf (make-a-record name class ttl (first data) auth auth)))
+      (:aaaa (add-or-update-aaaa-record leaf (make-aaaa-record name class ttl (first data) auth auth)))
       (:ns (add-or-update-ns-record leaf (make-ns-record name class ttl (augment-name (first data) origin) auth auth)))
       (:cname (setf (leaf-cname leaf) (make-cname-record name class ttl (augment-name (first data) origin) auth auth)))
       (:ptr (setf (leaf-ptr leaf) (make-ptr-record name class ttl (augment-name (first data) origin) auth auth)))
@@ -1189,6 +1209,18 @@
     (setf address (parse-ip-addr address)))
   (make-rr :type :a
 	   :rrtype (keyword-to-rrtype :a)
+	   :name name
+	   :class class
+	   :ttl ttl
+	   :data address
+	   :auth auth
+	   :fromauth fromauth))
+
+(defun make-aaaa-record (name class ttl address auth fromauth)
+  (when (stringp address)
+    (setf address (parse-ipv6-addr address)))
+  (make-rr :type :aaaa
+	   :rrtype (keyword-to-rrtype :aaaa)
 	   :name name
 	   :class class
 	   :ttl ttl
@@ -1262,6 +1294,17 @@
          (update-nextttl rr)))
       (t
        (push rr (leaf-a leaf))
+       (update-nextttl rr)))))
+
+(defun add-or-update-aaaa-record (leaf rr)
+  (let ((spot (member (rr-data rr) (leaf-aaaa leaf) :key #'rr-data :test #'=)))
+    (cond
+      (spot 
+       (when (should-update-p (first spot) rr)
+         (setf (first spot) rr)
+         (update-nextttl rr)))
+      (t
+       (push rr (leaf-aaaa leaf))
        (update-nextttl rr)))))
 
 (defun add-or-update-ns-record (leaf rr)
@@ -1438,6 +1481,16 @@
               offset newoffset)))
     res))
 
+(defun parse-ipv6-addr (string)
+  (let* ((components (cl-ppcre:split ":" string))
+         (empty-fields (- 9 (length components)))
+         (return-value 0))
+    (dolist (component components)
+      (setf return-value (if (equal "" component)
+                             (ash return-value (* 16 empty-fields))
+                             (logior (ash return-value 16) (parse-integer component :radix 16)))))
+    return-value))
+
 (defun number-to-ipaddr-string (number)
   (let ((shift -24))
     (with-output-to-string (s)
@@ -1447,6 +1500,9 @@
 	(unless (= i 3)
           (write-string "." s)))
       s)))
+
+(defun number-to-ipv6addr-string (number)
+  (cl-ppcre:regex-replace-all "(....)" (format nil "~32,'0X" number) "\\1:"))
 
 ;;;
 ;;; Expiration stuff
@@ -1787,7 +1843,7 @@
                (return :servfail)))
            
            ;; Some sanity checks.
-           (unless (every (lambda (rr) (eq (rr-type rr) :a)) (third res))
+           (unless (every (lambda (rr) (member (rr-type rr) '(:aaaa :a))) (third res))
              (error "Weird!  Got at least one non-A record in the additional section of a delegation: ~S" res))
            (unless (every (lambda (rr) (eq (rr-type rr) :ns)) (second res))
              (error "Weird!  Got at least one one-NS record in the authority section of a delegation: ~S" res))
@@ -2176,7 +2232,7 @@
              (update-nextttl rr))
            (funcall writer leaf rrset))
           (t 
-           (error "Ack! Bogus rrmethod!")))))))
+           (error "Ack! Bogus rrmethod ~A!" method)))))))
 
 ;;; end resolver section
 
@@ -2391,6 +2447,8 @@
 	  (case (rr-type rr)
 	    (:a 
 	     (add-or-update-a-record leaf rr))
+	    (:aaaa
+	     (add-or-update-aaaa-record leaf rr))
 	    (:ns
 	     (add-or-update-ns-record leaf rr))
 	    (:mx
@@ -2485,7 +2543,7 @@
 (defun dumpleaf (leaf name stream)
   ;; order of the readers kinda matters.  Normal zone files have the SOA first,
   ;; then NS records.   A records usually follow.  The rest is arbitrary.
-  (dolist (reader '(leaf-soa leaf-ns leaf-a leaf-cname 
+  (dolist (reader '(leaf-soa leaf-ns leaf-a leaf-aaaa leaf-cname 
 		    leaf-mx leaf-ptr leaf-srv)) 
     (let ((rrs (funcall reader leaf)))
       (if (listp rrs)

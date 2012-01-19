@@ -3,6 +3,7 @@
   (:export #:make-gate
            #:open-gate
            #:close-gate
+           #:wait-open-gate
            #:gate-open-p))
 
 (in-package :gates)
